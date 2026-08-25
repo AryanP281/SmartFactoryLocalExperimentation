@@ -1,0 +1,26 @@
+{  
+  mode: "client",
+
+  connect: {
+    endpoints: ["tcp/zenohrouter:7447"]
+  },
+
+  scouting: {
+    multicast: {
+      enabled: false
+    }
+  },
+
+  qos: {
+    publication: [
+      {
+        key_exprs: ["**"],
+
+        config: {
+          reliability: "reliable",
+          congestion_control: "block"
+        }
+      }
+    ]
+  }
+}

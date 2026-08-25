@@ -1,0 +1,457 @@
+
+Vagrant.configure("2") do |config|
+    config.vm.box = "bento/ubuntu-24.04"
+
+    config.vm.define "infra" do |infra|
+        infra.vm.hostname = "infra"
+        infra.vm.network "private_network", ip: "192.168.59.2"
+        infra.vm.network "private_network", ip: "192.168.60.2"
+        infra.vm.network "private_network", ip: "192.168.61.2"
+        infra.vm.network "private_network", ip: "192.168.62.2"
+
+        infra.vm.provider "virtualbox" do |vb|
+            vb.memory = 2048
+            vb.cpus = 2
+        end
+
+        infra.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/infra
+
+            cp -r /vagrant/infra/. /opt/smartfactory/infra
+
+            cd /opt/smartfactory/infra
+            export ETCD_IP=192.168.59.2
+            docker compose down
+            docker compose up -d
+        SHELL
+    end
+
+    
+    config.vm.define "collector" do |collector|
+        collector.vm.hostname = "collector"
+        collector.vm.network "private_network", ip: "192.168.59.3"
+
+        collector.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        collector.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.59.2 zenohrouter" /etc/hosts || echo "192.168.59.2 zenohrouter" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactorycollector/docker
+
+            cp -r /vagrant/metricscollector/. /opt/smartfactorycollector/docker
+            cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactorycollector/docker/zenoh.json5
+
+            docker rm -f smartfactorycollector 2>/dev/null || true
+
+            cd /opt/smartfactorycollector/docker
+            docker build -t smartfactorycollector:csml .
+            docker run -d \
+            --name smartfactorycollector \
+            --network host \
+            -v /vagrant/metrics:/collector/metrics:rw \
+            -e ZENOH_CONFIG_URI=/collector/zenoh/zenoh.json5 \
+            smartfactorycollector:csml
+        SHELL
+    end
+
+    config.vm.define "service" do |service|
+        service.vm.hostname = "service"
+        service.vm.network "private_network", ip: "192.168.59.10"
+
+        service.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        service.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.59.2 zenohrouter" /etc/hosts || echo "192.168.59.2 zenohrouter" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+
+            mkdir -p /opt/smartfactoryservice/docker
+
+            cp -r /vagrant/service/. /opt/smartfactoryservice/docker
+            cp /vagrant/zenohConfig/zenohSrv.json5 /opt/smartfactoryservice/docker/zenohSrv.json5
+
+            docker rm -f smartfactoryservicecsm 2>/dev/null || true
+
+            cd /opt/smartfactoryservice/docker
+            docker build -t smartfactoryservice:csm .
+            docker run -d \
+            --name smartfactoryservicecsm \
+            --network host \
+            -e ZENOH_CONFIG_URI=/service/zenoh/zenohSrv.json5 \
+            smartfactoryservice:csm
+        SHELL
+    end
+
+    config.vm.define "starteventpublisher" do |ep|
+        ep.vm.hostname = "starteventpublisher"
+        ep.vm.network "private_network", ip: "192.168.62.10"
+
+        ep.vm.provider "virtualbox" do |vb|
+            vb.memory = 2048
+            vb.cpus = 2
+        end
+
+        ep.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.62.2 zenohrouter" /etc/hosts || echo "192.168.62.2 zenohrouter" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+
+            mkdir -p /opt/smartfactoryeventpublisher/docker
+
+            cp -r /vagrant/eventpublisher/. /opt/smartfactoryeventpublisher/docker
+            cp /vagrant/zenohConfig/zenohSrv.json5 /opt/smartfactoryeventpublisher/docker/zenohSrv.json5
+
+            docker rm -f smartfactoryepcsm 2>/dev/null || true
+
+            cd /opt/smartfactoryeventpublisher/docker
+            docker build -t smartfactoryep:csm .
+            docker run -d \
+            --name smartfactoryepcsm \
+            --network host \
+            -e ZENOH_CONFIG_URI=/publisher/zenoh/zenohSrv.json5 \
+            -e PART_ARRIVAl_RATE_PER_SEC=0.25 \
+            -e PUBLISH_START_DELAY=480000 \
+            smartfactoryep:csm
+        SHELL
+    end
+
+    config.vm.define "monitor" do |monitor|
+    monitor.vm.hostname = "monitor"
+    monitor.vm.network "private_network", ip: "192.168.60.10"
+
+    monitor.vm.provider "virtualbox" do |vb|
+        vb.memory = 1024
+        vb.cpus = 1
+    end
+
+    monitor.vm.provision "shell", inline: <<-SHELL
+        set -e
+
+        grep -qxF "192.168.60.2 zenohrouter" /etc/hosts || echo "192.168.60.2 zenohrouter" >> /etc/hosts
+        grep -qxF "192.168.59.10 service" /etc/hosts || echo "192.168.59.10 service" >> /etc/hosts
+        grep -qxF "192.168.59.2 etcd" /etc/hosts || echo "192.168.59.2 etcd" >> /etc/hosts
+
+        apt-get update
+        apt-get install -y docker.io chrony
+        systemctl enable --now docker
+        systemctl enable --now chrony
+
+        chronyc makestep
+        chronyc waitsync
+        chronyc tracking
+
+        mkdir -p /opt/smartfactory/csml
+        mkdir -p /opt/smartfactory/zenoh
+
+        cp -r /vagrant/csml/. /opt/smartfactory/csml
+        cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactory/zenoh/zenoh.json5
+
+        docker rm -f monitorSM 2>/dev/null || true
+
+        docker run -d \
+        --name monitorSM \
+        --network host \
+        -e ETCD_CONTEXT_URL=http://etcd:2381 \
+        -e ZENOH_EVENT_HANDLER_CONFIG_URI=/opt/smartfactory/zenoh/zenoh.json5 \
+        -e MAIN_URI=file:///opt/smartfactory/csml/main.pkl \
+        -e RUN=monitor \
+        -e METRICS_DIRECTORY=/opt/smartfactory/metrics \
+        -v /vagrant/metrics/cirrina/monitor:/opt/smartfactory/metrics:rw \
+        -v /opt/smartfactory/zenoh:/opt/smartfactory/zenoh:ro \
+        -v /opt/smartfactory/csml:/opt/smartfactory/csml:ro \
+        collaborativestatemachines/cirrina:latest
+    SHELL
+end
+
+
+config.vm.define "messageprocessor" do |mp|
+    mp.vm.hostname = "messageprocessor"
+    mp.vm.network "private_network", ip: "192.168.60.11"
+
+    mp.vm.provider "virtualbox" do |vb|
+        vb.memory = 1024
+        vb.cpus = 1
+    end
+
+    mp.vm.provision "shell", inline: <<-SHELL
+        set -e
+
+        grep -qxF "192.168.60.2 zenohrouter" /etc/hosts || echo "192.168.60.2 zenohrouter" >> /etc/hosts
+        grep -qxF "192.168.59.10 service" /etc/hosts || echo "192.168.59.10 service" >> /etc/hosts
+        grep -qxF "192.168.59.2 etcd" /etc/hosts || echo "192.168.59.2 etcd" >> /etc/hosts
+
+        apt-get update
+        apt-get install -y docker.io chrony
+        systemctl enable --now docker
+        systemctl enable --now chrony
+
+        chronyc makestep
+        chronyc waitsync
+        chronyc tracking
+
+        mkdir -p /opt/smartfactory/csml
+        mkdir -p /opt/smartfactory/zenoh
+
+        cp -r /vagrant/csml/. /opt/smartfactory/csml
+        cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactory/zenoh/zenoh.json5
+
+        docker rm -f messageprocessorSM 2>/dev/null || true
+
+        docker run -d \
+        --name messageprocessorSM \
+        --network host \
+        -e ETCD_CONTEXT_URL=http://etcd:2381 \
+        -e ZENOH_EVENT_HANDLER_CONFIG_URI=/opt/smartfactory/zenoh/zenoh.json5 \
+        -e MAIN_URI=file:///opt/smartfactory/csml/main.pkl \
+        -e RUN=messageProcessor \
+        -e METRICS_DIRECTORY=/opt/smartfactory/metrics \
+        -v /vagrant/metrics/cirrina/messageprocessor:/opt/smartfactory/metrics:rw \
+        -v /opt/smartfactory/zenoh:/opt/smartfactory/zenoh:ro \
+        -v /opt/smartfactory/csml:/opt/smartfactory/csml:ro \
+        collaborativestatemachines/cirrina:latest
+    SHELL
+end
+
+
+config.vm.define "jobcontroller" do |jc|
+    jc.vm.hostname = "jobcontroller"
+    jc.vm.network "private_network", ip: "192.168.60.12"
+
+    jc.vm.provider "virtualbox" do |vb|
+        vb.memory = 1024
+        vb.cpus = 1
+    end
+
+    jc.vm.provision "shell", inline: <<-SHELL
+        set -e
+
+        grep -qxF "192.168.60.2 zenohrouter" /etc/hosts || echo "192.168.60.2 zenohrouter" >> /etc/hosts
+        grep -qxF "192.168.59.10 service" /etc/hosts || echo "192.168.59.10 service" >> /etc/hosts
+        grep -qxF "192.168.59.2 etcd" /etc/hosts || echo "192.168.59.2 etcd" >> /etc/hosts
+
+        apt-get update
+        apt-get install -y docker.io chrony
+        systemctl enable --now docker
+        systemctl enable --now chrony
+
+        chronyc makestep
+        chronyc waitsync
+        chronyc tracking
+
+        mkdir -p /opt/smartfactory/csml
+        mkdir -p /opt/smartfactory/zenoh
+
+        cp -r /vagrant/csml/. /opt/smartfactory/csml
+        cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactory/zenoh/zenoh.json5
+
+        docker rm -f jobcontrollerSM 2>/dev/null || true
+
+        docker run -d \
+        --name jobcontrollerSM \
+        --network host \
+        -e ETCD_CONTEXT_URL=http://etcd:2381 \
+        -e ZENOH_EVENT_HANDLER_CONFIG_URI=/opt/smartfactory/zenoh/zenoh.json5 \
+        -e MAIN_URI=file:///opt/smartfactory/csml/main.pkl \
+        -e RUN=jobController \
+        -e METRICS_DIRECTORY=/opt/smartfactory/metrics \
+        -v /vagrant/metrics/cirrina/jobcontroller:/opt/smartfactory/metrics:rw \
+        -v /opt/smartfactory/zenoh:/opt/smartfactory/zenoh:ro \
+        -v /opt/smartfactory/csml:/opt/smartfactory/csml:ro \
+        collaborativestatemachines/cirrina:latest
+    SHELL
+end
+
+
+config.vm.define "arm" do |arm|
+    arm.vm.hostname = "arm"
+    arm.vm.network "private_network", ip: "192.168.61.10"
+
+    arm.vm.provider "virtualbox" do |vb|
+        vb.memory = 1024
+        vb.cpus = 1
+    end
+
+    arm.vm.provision "shell", inline: <<-SHELL
+        set -e
+
+        grep -qxF "192.168.61.2 zenohrouter" /etc/hosts || echo "192.168.61.2 zenohrouter" >> /etc/hosts
+        grep -qxF "192.168.59.10 service" /etc/hosts || echo "192.168.59.10 service" >> /etc/hosts
+        grep -qxF "192.168.59.2 etcd" /etc/hosts || echo "192.168.59.2 etcd" >> /etc/hosts
+
+        apt-get update
+        apt-get install -y docker.io chrony
+        systemctl enable --now docker
+        systemctl enable --now chrony
+
+        chronyc makestep
+        chronyc waitsync
+        chronyc tracking
+
+        mkdir -p /opt/smartfactory/csml
+        mkdir -p /opt/smartfactory/zenoh
+
+        cp -r /vagrant/csml/. /opt/smartfactory/csml
+        cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactory/zenoh/zenoh.json5
+
+        docker rm -f armSM 2>/dev/null || true
+
+        docker run -d \
+        --name armSM \
+        --network host \
+        -e ETCD_CONTEXT_URL=http://etcd:2381 \
+        -e ZENOH_EVENT_HANDLER_CONFIG_URI=/opt/smartfactory/zenoh/zenoh.json5 \
+        -e MAIN_URI=file:///opt/smartfactory/csml/main.pkl \
+        -e RUN=arm \
+        -e METRICS_DIRECTORY=/opt/smartfactory/metrics \
+        -v /vagrant/metrics/cirrina/arm:/opt/smartfactory/metrics:rw \
+        -v /opt/smartfactory/zenoh:/opt/smartfactory/zenoh:ro \
+        -v /opt/smartfactory/csml:/opt/smartfactory/csml:ro \
+        collaborativestatemachines/cirrina:latest
+    SHELL
+end
+
+
+config.vm.define "belt" do |belt|
+    belt.vm.hostname = "belt"
+    belt.vm.network "private_network", ip: "192.168.61.11"
+
+    belt.vm.provider "virtualbox" do |vb|
+        vb.memory = 1024
+        vb.cpus = 1
+    end
+
+    belt.vm.provision "shell", inline: <<-SHELL
+        set -e
+
+        grep -qxF "192.168.61.2 zenohrouter" /etc/hosts || echo "192.168.61.2 zenohrouter" >> /etc/hosts
+        grep -qxF "192.168.59.10 service" /etc/hosts || echo "192.168.59.10 service" >> /etc/hosts
+        grep -qxF "192.168.59.2 etcd" /etc/hosts || echo "192.168.59.2 etcd" >> /etc/hosts
+
+        apt-get update
+        apt-get install -y docker.io chrony
+        systemctl enable --now docker
+        systemctl enable --now chrony
+
+        chronyc makestep
+        chronyc waitsync
+        chronyc tracking
+
+        mkdir -p /opt/smartfactory/csml
+        mkdir -p /opt/smartfactory/zenoh
+
+        cp -r /vagrant/csml/. /opt/smartfactory/csml
+        cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactory/zenoh/zenoh.json5
+
+        docker rm -f beltSM 2>/dev/null || true
+
+        docker run -d \
+        --name beltSM \
+        --network host \
+        -e ETCD_CONTEXT_URL=http://etcd:2381 \
+        -e ZENOH_EVENT_HANDLER_CONFIG_URI=/opt/smartfactory/zenoh/zenoh.json5 \
+        -e MAIN_URI=file:///opt/smartfactory/csml/main.pkl \
+        -e RUN=conveyorBelt \
+        -e METRICS_DIRECTORY=/opt/smartfactory/metrics \
+        -v /vagrant/metrics/cirrina/belt:/opt/smartfactory/metrics:rw \
+        -v /opt/smartfactory/zenoh:/opt/smartfactory/zenoh:ro \
+        -v /opt/smartfactory/csml:/opt/smartfactory/csml:ro \
+        collaborativestatemachines/cirrina:latest
+    SHELL
+end
+
+
+config.vm.define "assemblycontroller" do |ac|
+    ac.vm.hostname = "assemblycontroller"
+    ac.vm.network "private_network", ip: "192.168.61.12"
+
+    ac.vm.provider "virtualbox" do |vb|
+        vb.memory = 1024
+        vb.cpus = 1
+    end
+
+    ac.vm.provision "shell", inline: <<-SHELL
+        set -e
+
+        grep -qxF "192.168.61.2 zenohrouter" /etc/hosts || echo "192.168.61.2 zenohrouter" >> /etc/hosts
+        grep -qxF "192.168.59.10 service" /etc/hosts || echo "192.168.59.10 service" >> /etc/hosts
+        grep -qxF "192.168.59.2 etcd" /etc/hosts || echo "192.168.59.2 etcd" >> /etc/hosts
+
+        apt-get update
+        apt-get install -y docker.io chrony
+        systemctl enable --now docker
+        systemctl enable --now chrony
+
+        chronyc makestep
+        chronyc waitsync
+        chronyc tracking
+
+        mkdir -p /opt/smartfactory/csml
+        mkdir -p /opt/smartfactory/zenoh
+
+        cp -r /vagrant/csml/. /opt/smartfactory/csml
+        cp /vagrant/zenohConfig/zenoh.json5 /opt/smartfactory/zenoh/zenoh.json5
+
+        docker rm -f assemblycontrollerSM 2>/dev/null || true
+
+        docker run -d \
+        --name assemblycontrollerSM \
+        --network host \
+        -e ETCD_CONTEXT_URL=http://etcd:2381 \
+        -e ZENOH_EVENT_HANDLER_CONFIG_URI=/opt/smartfactory/zenoh/zenoh.json5 \
+        -e MAIN_URI=file:///opt/smartfactory/csml/main.pkl \
+        -e RUN=assemblyController \
+        -e METRICS_DIRECTORY=/opt/smartfactory/metrics \
+        -v /vagrant/metrics/cirrina/assemblycontroller:/opt/smartfactory/metrics:rw \
+        -v /opt/smartfactory/zenoh:/opt/smartfactory/zenoh:ro \
+        -v /opt/smartfactory/csml:/opt/smartfactory/csml:ro \
+        collaborativestatemachines/cirrina:latest
+    SHELL
+end
+
+end

@@ -1,0 +1,11 @@
+apiversion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+spec:
+  tracing:
+    samplingRate: "1"
+    zipkin:
+      endpointAddress: "http://daprruntime:9411/api/v2/spans"
+
+      

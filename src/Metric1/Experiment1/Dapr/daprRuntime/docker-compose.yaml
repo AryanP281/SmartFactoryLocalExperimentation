@@ -1,0 +1,29 @@
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.4.37
+    tmpfs:
+      - /etcd-dapr-data
+    ports:
+      - "2382:2382"
+      - "2383:2383"
+    command:
+      - /usr/local/bin/etcd
+      - --name=node1
+      - --data-dir=/etcd-dapr-data
+      - --listen-client-urls=http://0.0.0.0:2383
+      - --advertise-client-urls=http://${RUNTIME_IP}:2383
+      - --listen-peer-urls=http://0.0.0.0:2382
+      - --initial-advertise-peer-urls=http://${RUNTIME_IP}:2382
+      - --initial-cluster=node1=http://${RUNTIME_IP}:2382
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  placement:
+    image: daprio/dapr:1.17.1
+    command: ["./placement", "-port", "50006"]
+    ports:
+      - "50006:50006"

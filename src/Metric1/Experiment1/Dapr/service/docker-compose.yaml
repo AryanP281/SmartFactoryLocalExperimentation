@@ -1,0 +1,33 @@
+
+services:
+  dapr:
+    image: daprio/daprd:1.17.1
+    command:
+      - "./daprd"
+      - "-app-id"
+      - ${APP_ID}
+      - "-app-port"
+      - "${APP_PORT}"
+      - "--app-channel-address"
+      - "app"
+      - "-placement-host-address"
+      - "${RUNTIME_IP}:50006"
+      - "-resources-path"
+      - "/dapr/components"
+    volumes:
+      - ${DAPR_VOL-/opt/dapr}:/dapr:ro
+    extra_hosts:
+      - "daprruntime:${RUNTIME_IP}"
+
+  app:
+    image: ${DAPR_APP_IMG:-daprApp}
+    pull_policy: never
+    environment:
+      PUBLISH_START_DELAY: ${PUBLISH_START_DELAY}
+      PART_ARRIVAl_RATE_PER_SEC: ${PART_ARRIVAl_RATE_PER_SEC}
+      DAPR_HTTP_ENDPOINT: http://dapr:3500
+      DAPR_GRPC_ENDPOINT: http://dapr:50001
+    ports:
+      - "${APP_PORT}:${APP_PORT}"
+    depends_on:
+      - dapr

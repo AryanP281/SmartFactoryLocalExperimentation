@@ -1,0 +1,397 @@
+Vagrant.configure("2") do |config|
+    config.vm.box = "bento/ubuntu-24.04"
+
+    config.vm.define "dapr" do |dapr|
+        dapr.vm.hostname = "daprruntime"
+        dapr.vm.network "private_network", ip: "192.168.56.2"
+
+        dapr.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        dapr.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/dapr
+
+            cp -r /vagrant/daprRuntime/. /opt/dapr
+
+            cd /opt/dapr
+            export RUNTIME_IP=192.168.56.2
+            docker compose down
+            docker compose up -d
+        SHELL
+    end
+
+    config.vm.define "collector" do |collector|
+        collector.vm.hostname = "collector"
+        collector.vm.network "private_network", ip: "192.168.56.11"
+
+        collector.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        collector.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+
+            mkdir -p /opt/smartfactorycollector/docker
+            mkdir -p /opt/smartfactorycollector/dapr
+
+            cp -r /vagrant/collector/. /opt/smartfactorycollector/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactorycollector/dapr
+
+            cd /opt/smartfactorycollector/docker
+            docker build -t smartfactorycollector:dapr .
+            export APP_ID=smartfactorycollector
+            export APP_PORT=8081
+            export RUNTIME_IP=192.168.56.2
+            export DAPR_VOL=/opt/smartfactorycollector/dapr
+            export DAPR_APP_IMG=smartfactorycollector:dapr
+            export COLLECTOR_RUN_ID=100
+            docker compose down
+            docker compose up -d
+        SHELL
+    end
+
+    config.vm.define "service" do |service|
+        service.vm.hostname = "service"
+        service.vm.network "private_network", ip: "192.168.56.10"
+
+        service.vm.provider "virtualbox" do |vb|
+            vb.memory = 2048
+            vb.cpus = 2
+        end
+
+        service.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+
+            mkdir -p /opt/smartfactoryservice/docker
+            mkdir -p /opt/smartfactoryservice/dapr
+
+            cp -r /vagrant/service/. /opt/smartfactoryservice/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactoryservice/dapr
+
+            cd /opt/smartfactoryservice/docker
+            docker build -t smartfactoryservice:dapr .
+            export APP_ID=service-app
+            export APP_PORT=6000
+            export DAPR_VOL=/opt/smartfactoryservice/dapr
+            export RUNTIME_IP=192.168.56.2
+            export DAPR_APP_IMG=smartfactoryservice:dapr
+            export PUBLISH_START_DELAY=480000
+            export PART_ARRIVAl_RATE_PER_SEC=0.25
+            docker compose down
+            docker compose up -d
+        SHELL
+    end
+
+    config.vm.define "monitor" do |monitor|
+        monitor.vm.hostname = "monitor"
+        monitor.vm.network "private_network", ip: "192.168.57.10"
+
+        monitor.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        monitor.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.10 service" /etc/hosts || echo "192.168.56.10 service" >> /etc/hosts
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/docker
+            mkdir -p /opt/smartfactory/dapr
+
+            cp -r /vagrant/daprProject/. /opt/smartfactory/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactory/dapr
+            
+            cd /opt/smartfactory/docker
+            docker build -t smartfactory:dapr .
+            export APP_ID=monitor
+            export APP_PORT=8081
+            export DAPR_VOL=/opt/smartfactory/dapr
+            export RUNTIME_IP=192.168.56.2
+            export SERVICE_IP=192.168.56.10
+            export DAPR_APP_IMG=smartfactory:dapr
+            export ACTOR_ROLE=monitor
+            export ACTOR_ID=monitor-0
+            docker compose down
+            docker compose up -d
+
+        SHELL
+    end
+
+    config.vm.define "messageprocessor" do |mp|
+        mp.vm.hostname = "messageprocessor"
+        mp.vm.network "private_network", ip: "192.168.57.11"
+
+        mp.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        mp.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.10 service" /etc/hosts || echo "192.168.56.10 service" >> /etc/hosts
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/docker
+            mkdir -p /opt/smartfactory/dapr
+
+            cp -r /vagrant/daprProject/. /opt/smartfactory/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactory/dapr
+            
+            cd /opt/smartfactory/docker
+            docker build -t smartfactory:dapr .
+            export APP_ID=messageprocessor
+            export APP_PORT=8081
+            export DAPR_VOL=/opt/smartfactory/dapr
+            export RUNTIME_IP=192.168.56.2
+            export SERVICE_IP=192.168.56.10
+            export DAPR_APP_IMG=smartfactory:dapr
+            export ACTOR_ROLE=messageprocessor
+            export ACTOR_ID=mp-0
+            docker compose down
+            docker compose up -d
+
+        SHELL
+    end
+
+    config.vm.define "jobcontroller" do |jc|
+        jc.vm.hostname = "jobcontroller"
+        jc.vm.network "private_network", ip: "192.168.57.12"
+
+        jc.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        jc.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.10 service" /etc/hosts || echo "192.168.56.10 service" >> /etc/hosts
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/docker
+            mkdir -p /opt/smartfactory/dapr
+
+            cp -r /vagrant/daprProject/. /opt/smartfactory/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactory/dapr
+            
+            cd /opt/smartfactory/docker
+            docker build -t smartfactory:dapr .
+            export APP_ID=jobcontroller
+            export APP_PORT=8081
+            export DAPR_VOL=/opt/smartfactory/dapr
+            export RUNTIME_IP=192.168.56.2
+            export SERVICE_IP=192.168.56.10
+            export DAPR_APP_IMG=smartfactory:dapr
+            export ACTOR_ROLE=jobcontroller
+            export ACTOR_ID=jc-0
+            docker compose down
+            docker compose up -d
+
+        SHELL
+    end
+
+    config.vm.define "arm" do |arm|
+        arm.vm.hostname = "arm"
+        arm.vm.network "private_network", ip: "192.168.58.10"
+
+        arm.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        arm.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.10 service" /etc/hosts || echo "192.168.56.10 service" >> /etc/hosts
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/docker
+            mkdir -p /opt/smartfactory/dapr
+
+            cp -r /vagrant/daprProject/. /opt/smartfactory/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactory/dapr
+            
+            cd /opt/smartfactory/docker
+            docker build -t smartfactory:dapr .
+            export APP_ID=arm
+            export APP_PORT=8081
+            export DAPR_VOL=/opt/smartfactory/dapr
+            export RUNTIME_IP=192.168.56.2
+            export SERVICE_IP=192.168.56.10
+            export DAPR_APP_IMG=smartfactory:dapr
+            export ACTOR_ROLE=arm
+            export ACTOR_ID=arm-0
+            docker compose down
+            docker compose up -d
+
+        SHELL
+    end
+
+    config.vm.define "belt" do |belt|
+        belt.vm.hostname = "belt"
+        belt.vm.network "private_network", ip: "192.168.58.11"
+
+        belt.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        belt.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.10 service" /etc/hosts || echo "192.168.56.10 service" >> /etc/hosts
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/docker
+            mkdir -p /opt/smartfactory/dapr
+
+            cp -r /vagrant/daprProject/. /opt/smartfactory/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactory/dapr
+            
+            cd /opt/smartfactory/docker
+            docker build -t smartfactory:dapr .
+            export APP_ID=belt
+            export APP_PORT=8081
+            export DAPR_VOL=/opt/smartfactory/dapr
+            export RUNTIME_IP=192.168.56.2
+            export SERVICE_IP=192.168.56.10
+            export DAPR_APP_IMG=smartfactory:dapr
+            export ACTOR_ROLE=belt
+            export ACTOR_ID=belt-0
+            docker compose down
+            docker compose up -d
+
+        SHELL
+    end
+
+    config.vm.define "assemblycontroller" do |ac|
+        ac.vm.hostname = "assemblycontroller"
+        ac.vm.network "private_network", ip: "192.168.58.12"
+
+        ac.vm.provider "virtualbox" do |vb|
+            vb.memory = 1024
+            vb.cpus = 1
+        end
+
+        ac.vm.provision "shell", inline: <<-SHELL
+            set -e
+
+            grep -qxF "192.168.56.10 service" /etc/hosts || echo "192.168.56.10 service" >> /etc/hosts
+            grep -qxF "192.168.56.2 daprruntime" /etc/hosts || echo "192.168.56.2 daprruntime" >> /etc/hosts
+
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 chrony
+            systemctl enable --now docker
+            systemctl enable --now chrony
+
+            chronyc makestep
+            chronyc waitsync
+            chronyc tracking
+            
+            mkdir -p /opt/smartfactory/docker
+            mkdir -p /opt/smartfactory/dapr
+
+            cp -r /vagrant/daprProject/. /opt/smartfactory/docker
+            cp -r /vagrant/config/dapr/. /opt/smartfactory/dapr
+            
+            cd /opt/smartfactory/docker
+            docker build -t smartfactory:dapr .
+            export APP_ID=assemblycontroller
+            export APP_PORT=8081
+            export DAPR_VOL=/opt/smartfactory/dapr
+            export RUNTIME_IP=192.168.56.2
+            export SERVICE_IP=192.168.56.10
+            export DAPR_APP_IMG=smartfactory:dapr
+            export ACTOR_ROLE=assemblycontroller
+            export ACTOR_ID=ac-0
+            docker compose down
+            docker compose up -d
+
+        SHELL
+    end
+
+end
