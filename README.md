@@ -19,4 +19,6 @@ The following arch linux packages:
 
 ## Instructions
 
-Each experiment has as `run.py` file which orchestrates and executes the experiments.
+Generate .jar files for the service, metrics collector and event publisher and add to the appropriate docker folder in `results/Metric{x}/Experiment{y}/Cirrina` and `results/Metric{x}/Experiment{y}/Dapr`.
+
+Each experiment has as `run.py` file which orchestrates and executes the experiments. Execute the file using python.
